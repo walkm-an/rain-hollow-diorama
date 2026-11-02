@@ -1,6 +1,6 @@
 import { HEIGHT, WIDTH } from '../contract.ts';
 import type { Frame, Scene } from '../frame.ts';
-import { loopNoise } from '../loop.ts';
+import { noiseTrack, sampleNoise, type NoiseTrack } from '../loop.ts';
 import { MAT } from '../raster.ts';
 import { farCabinWindow } from '../scene/backdrop.ts';
 import { FIRE } from '../scene/campfire.ts';
@@ -227,6 +227,8 @@ interface Mask {
   readonly w: number;
   readonly h: number;
   readonly data: Float32Array;
+  readonly flicker: readonly NoiseTrack[];
+  readonly depth: Float64Array;
 }
 
 function bakeMask(l: Light, scene: Scene): Mask {
@@ -239,13 +241,15 @@ function bakeMask(l: Light, scene: Scene): Mask {
   const h = y1 - y0 + 1;
   const data = new Float32Array(w * h);
   for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) data[j * w + i] = reach(l, scene, x0 + i, y0 + j);
-  return { light: l, x0, y0, w, h, data };
+  const flicker = l.flicker.map(([cycles], o) => noiseTrack(cycles, l.seed * 7 + o));
+  const depth = Float64Array.from(l.flicker, ([, d]) => d);
+  return { light: l, x0, y0, w, h, data, flicker, depth };
 }
 
-export function intensity(l: Light, u: number): number {
+function intensity(mask: Mask, u: number): number {
   let k = 1;
-  for (let o = 0; o < l.flicker.length; o++) k += l.flicker[o][1] * loopNoise(u, l.flicker[o][0], l.seed * 7 + o);
-  return l.power * k;
+  for (let o = 0; o < mask.flicker.length; o++) k += mask.depth[o] * sampleNoise(mask.flicker[o], u);
+  return mask.light.power * k;
 }
 
 // Builds the masks once against the baked scene; the returned pass adds
@@ -257,7 +261,7 @@ export function lightPass(scene: Scene): (f: Frame) => void {
     for (let m = 0; m < masks.length; m++) {
       const mask = masks[m];
       const l = mask.light;
-      const k = intensity(l, f.u);
+      const k = intensity(mask, f.u);
       let ox = 0;
       let oy = 0;
       if (l.follow) {

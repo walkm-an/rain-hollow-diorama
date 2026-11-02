@@ -41,34 +41,32 @@ export function hashUnit(a: number, b = 0, c = 0): number {
   return hash(a, b, c) / 4294967296;
 }
 
-function lattice(seed: number, k: number): number {
-  return hashUnit(seed, k) * 2 - 1;
+// Periodic value noise: `cycles` lattice points around the loop, so the curve
+// closes on itself. The lattice is hashed once at init; sampling only reads it.
+export interface NoiseTrack {
+  readonly cycles: number;
+  readonly lattice: Float64Array;
 }
 
-// Periodic Catmull-Rom value noise in [-1, 1] (slight overshoot possible):
-// `cycles` lattice points around the loop, so the curve closes on itself.
-export function loopNoise(t: number, cycles: number, seed: number): number {
+export function noiseTrack(cycles: number, seed: number): NoiseTrack {
   assertCycles(cycles);
-  const x = (phase(t) / LOOP_SECONDS) * cycles;
+  const lattice = new Float64Array(cycles);
+  for (let k = 0; k < cycles; k++) lattice[k] = hashUnit(seed, k) * 2 - 1;
+  return { cycles, lattice };
+}
+
+// Catmull-Rom through the lattice, in [-1, 1] with slight overshoot.
+export function sampleNoise(track: NoiseTrack, t: number): number {
+  const n = track.cycles;
+  const l = track.lattice;
+  const x = (phase(t) / LOOP_SECONDS) * n;
   const i = Math.floor(x);
   const f = x - i;
-  const p0 = lattice(seed, (i - 1 + cycles) % cycles);
-  const p1 = lattice(seed, i % cycles);
-  const p2 = lattice(seed, (i + 1) % cycles);
-  const p3 = lattice(seed, (i + 2) % cycles);
+  const p0 = l[(i - 1 + n) % n];
+  const p1 = l[i % n];
+  const p2 = l[(i + 1) % n];
+  const p3 = l[(i + 2) % n];
   return p1 + 0.5 * f * (p2 - p0 + f * (2 * p0 - 5 * p1 + 4 * p2 - p3 + f * (3 * (p1 - p2) + p3 - p0)));
-}
-
-export function loopFbm(t: number, cycles: number, seed: number, octaves: number): number {
-  let sum = 0;
-  let amp = 1;
-  let norm = 0;
-  for (let o = 0; o < octaves; o++) {
-    sum += amp * loopNoise(t, cycles << o, seed + o * 101);
-    norm += amp;
-    amp *= 0.5;
-  }
-  return sum / norm;
 }
 
 export interface Clock {

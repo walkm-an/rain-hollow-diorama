@@ -1,6 +1,6 @@
 import { HEIGHT, LOOP_SECONDS, WIDTH } from '../contract.ts';
 import type { Draw, Frame } from '../frame.ts';
-import { hashUnit, loopNoise } from '../loop.ts';
+import { hashUnit, noiseTrack, sampleNoise } from '../loop.ts';
 import { fbm2 } from '../noise.ts';
 import { C, FIRE_RAMP } from '../palette.ts';
 import { bayer, createTarget, ellipse, hline, line, MAT, px, type Target } from '../raster.ts';
@@ -95,12 +95,14 @@ export function campfireLayer(): Draw {
   const y1 = Math.min(HEIGHT, FIRE.y + 6);
   const x0 = FIRE.x - 22;
   const x1 = FIRE.x + 22;
+  const swayNoise = noiseTrack(96, 931);
+  const liftNoise = noiseTrack(360, 933);
 
   return (f: Frame) => {
     const data = f.target.data;
     const scroll = Math.floor((f.u / LOOP_SECONDS) * FLAME.tile * FLAME.wraps) % FLAME.tile;
-    const sway = loopNoise(f.u, 96, 931) * 1.4;
-    const lift = 0.85 + 0.15 * loopNoise(f.u, 360, 933);
+    const sway = sampleNoise(swayNoise, f.u) * 1.4;
+    const lift = 0.85 + 0.15 * sampleNoise(liftNoise, f.u);
     const left = FIRE.x - FLAME.w / 2;
     for (let j = 0; j < FLAME.h; j++) {
       const y = FIRE.y - 1 - j;
