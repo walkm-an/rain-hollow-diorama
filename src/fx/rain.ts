@@ -23,9 +23,9 @@ interface RainLayer {
 export const WIND_SLANT = 0.2;
 
 export const RAIN_LAYERS: Record<'far' | 'mid' | 'near', RainLayer> = {
-  far: { seed: 1201, count: 330, fall: [2, 1.875, 2.4], length: 3, slant: WIND_SLANT * 0.85, body: C.rain0, head: C.rain0, lands: false },
-  mid: { seed: 1301, count: 270, fall: [1.25, 1.2, 1.333333333333333], length: 5, slant: WIND_SLANT, body: C.rain1, head: C.rain2, lands: true },
-  near: { seed: 1401, count: 70, fall: [0.625, 0.6, 0.6666666666666666], length: 10, slant: WIND_SLANT * 1.15, body: C.rain2, head: C.rain3, lands: false },
+  far: { seed: 1201, count: 250, fall: [2, 1.875, 2.4], length: 3, slant: WIND_SLANT * 0.85, body: C.rain0, head: C.rain0, lands: false },
+  mid: { seed: 1301, count: 210, fall: [1.25, 1.2, 1.333333333333333], length: 5, slant: WIND_SLANT, body: C.rain1, head: C.rain2, lands: true },
+  near: { seed: 1401, count: 36, fall: [0.625, 0.6, 0.6666666666666666], length: 7, slant: WIND_SLANT * 1.15, body: C.rain1, head: C.rain2, lands: false },
 };
 
 const SPLASH_SECONDS = 0.13;
