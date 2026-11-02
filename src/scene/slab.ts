@@ -2,7 +2,7 @@ import { WIDTH } from '../contract.ts';
 import { hashUnit } from '../loop.ts';
 import { fbm1, fbm2 } from '../noise.ts';
 import { C } from '../palette.ts';
-import { bayer, disc, ellipse, line, MAT, px, stamp, type Target } from '../raster.ts';
+import { bayer, disc, line, MAT, poly, px, stamp, type Target } from '../raster.ts';
 
 // The floating block of earth. The top face is a shallow 2.5D band between
 // the back and front edges; the front is a vertical cut that crumbles below.
@@ -59,13 +59,21 @@ function faceRight(y: number): number {
   return SLAB.right - (y - SLAB.front) * SLAB.taper.right + (fbm1(y / 5, 509, 2) - 0.5) * 3;
 }
 
-// The crumbling underside: a shallow belly plus chunky steps and hanging lumps.
+// Pointed clods hanging off the underside, like the earth tore loose.
+const CLODS = Array.from({ length: 11 }, (_, i) => ({
+  x: SLAB.left + 26 + ((i + 0.2 + hashUnit(514, i) * 0.6) / 11) * (SLAB.right - SLAB.left - 52),
+  half: 4 + hashUnit(515, i) * 8,
+  drop: 5 + hashUnit(516, i) * 13,
+}));
+
+// The crumbling underside: a belly, broken into 3 px terraces, plus clods.
 const BOTTOM = profile((x) => {
-  const k = (x - 236) / 175;
-  const belly = SLAB.bottom + 9 * Math.max(0, 1 - k * k);
-  const chunk = Math.round((fbm1(x / 7, 511, 3) - 0.5) * 7);
-  const lump = Math.max(0, fbm1(x / 11, 513, 2) - 0.62) * 30;
-  return Math.round(belly + chunk + lump);
+  const k = (x - 240) / 172;
+  const belly = SLAB.bottom + 10 * Math.max(0, 1 - k * k);
+  const terrace = Math.round(((fbm1(x / 9, 511, 2) - 0.5) * 12) / 3) * 3;
+  let clod = 0;
+  for (const c of CLODS) clod = Math.max(clod, c.drop * (1 - Math.abs(x - c.x) / c.half));
+  return Math.round(belly + terrace + clod + (hashUnit(513, x >> 1) < 0.25 ? 1 : 0));
 });
 
 export function bottomAt(x: number): number {
@@ -88,6 +96,8 @@ const STRATA: readonly Stratum[] = [
   { depth: 15, colors: [C.soil2, C.stone0, C.stone1], grain: [9, 1.5] },
   { depth: 27, colors: [C.soil0, C.soil1, C.soil2], grain: [5, 3] },
   { depth: 32, colors: [C.wood1, C.wood2, C.stone1], grain: [10, 1.5] },
+  { depth: 44, colors: [C.soil0, C.soil1, C.soil2], grain: [5, 3] },
+  { depth: 49, colors: [C.soil1, C.stone0, C.soil2], grain: [3, 2] },
   { depth: 99, colors: [C.soil0, C.soil0, C.soil1], grain: [5, 3] },
 ];
 
@@ -103,7 +113,10 @@ function faceColor(x: number, y: number): number {
   const n = fbm2(x / s.grain[0], y / s.grain[1], 521, 2) + (bayer(x, y) - 0.5) * 0.18;
   let tone = n < 0.42 ? 0 : n < 0.66 ? 1 : 2;
   const edge = Math.min(x - faceLeft(y), faceRight(y) - x);
-  if (edge < 2.5 || bottomAt(x) - y <= 2) tone = Math.max(0, tone - 1);
+  const under = bottomAt(x) - y;
+  if (under <= 1) return C.ink;
+  if (under <= 4) return bayer(x, y) < 0.6 ? C.soil0 : C.ink;
+  if (edge < 2.5 || under <= 7) tone = Math.max(0, tone - 1);
   if (d <= 1) tone = 0;
   return s.colors[tone];
 }
@@ -118,58 +131,140 @@ function bakeFace(t: Target): void {
   }
 }
 
-function bakeStones(t: Target): void {
-  t.pen = MAT.face;
-  for (let i = 0; i < 46; i++) {
-    const x = SLAB.left + 14 + hashUnit(531, i) * (SLAB.right - SLAB.left - 28);
-    const y = SLAB.front + 8 + hashUnit(533, i) * 50;
-    const r = 1.2 + hashUnit(535, i) ** 2 * 3.4;
-    if (!insideFace(x - r, y + r + 1) || !insideFace(x + r, y + r + 1)) continue;
-    const rx = r * (1.1 + hashUnit(537, i) * 0.5);
-    ellipse(t, x, y, rx, r, C.soil0);
-    ellipse(t, x - 0.4, y - 0.4, rx - 0.6, r - 0.6, C.stone0);
-    ellipse(t, x - 0.8, y - 0.9, Math.max(0.6, rx - 1.6), Math.max(0.5, r - 1.4), C.stone1);
-    if (r > 2.5) px(t, x - rx * 0.4, y - r * 0.5, C.stone2);
+// A faceted rock: each pixel takes the shade of the polygon edge it sits
+// behind, lit from the upper left, with a dark lip along the underside.
+function bakeRock(t: Target, cx: number, cy: number, r: number, seed: number): void {
+  const n = 5 + Math.floor(hashUnit(seed, 0) * 3);
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = ((i + (hashUnit(seed, 1, i) - 0.5) * 0.5) / n) * Math.PI * 2;
+    const rr = r * (0.75 + 0.35 * hashUnit(seed, 2, i));
+    xs.push(cx + Math.cos(a) * rr * 1.25);
+    ys.push(cy + Math.sin(a) * rr * 0.85);
+  }
+  for (let y = Math.floor(cy - r - 1); y <= Math.ceil(cy + r + 1); y++) {
+    for (let x = Math.floor(cx - r * 1.4 - 1); x <= Math.ceil(cx + r * 1.4 + 1); x++) {
+      const px0 = x + 0.5;
+      const py0 = y + 0.5;
+      let inside = true;
+      let nearest = Infinity;
+      let lit = 0;
+      for (let i = 0; i < n && inside; i++) {
+        const ax = xs[i];
+        const ay = ys[i];
+        const ex = xs[(i + 1) % n] - ax;
+        const ey = ys[(i + 1) % n] - ay;
+        const len = Math.hypot(ex, ey);
+        const dist = ((px0 - ax) * ey - (py0 - ay) * ex) / -len;
+        if (dist < 0) inside = false;
+        else if (dist < nearest) {
+          nearest = dist;
+          lit = (ey / len) * -0.6 + (-ex / len) * -0.8;
+        }
+      }
+      if (!inside || !insideFace(x, y)) continue;
+      const rim = nearest < 1;
+      const c = rim
+        ? lit > 0.45 ? C.stone2 : lit < -0.3 ? C.ink : C.soil0
+        : lit > 0.45 ? C.stone2 : lit > -0.2 ? C.stone1 : C.stone0;
+      px(t, x, y, c);
+    }
   }
 }
 
-// A coffin cut lengthwise by the face, with a few bones inside.
-const COFFIN = { x: 104, y: 204, w: 46, h: 11 };
+const ROCK_CLUSTERS: readonly { x: number; y: number; n: number }[] = [
+  { x: 84, y: 209, n: 3 },
+  { x: 178, y: 224, n: 4 },
+  { x: 238, y: 207, n: 3 },
+  { x: 285, y: 225, n: 5 },
+  { x: 346, y: 208, n: 3 },
+  { x: 388, y: 223, n: 4 },
+];
+
+function bakeStones(t: Target): void {
+  t.pen = MAT.face;
+  ROCK_CLUSTERS.forEach((cl, k) => {
+    for (let i = 0; i < cl.n; i++) {
+      const seed = 531 + k * 17 + i;
+      const r = 2.2 + hashUnit(seed, 9) ** 1.5 * 3.6;
+      const x = cl.x + (hashUnit(seed, 7) - 0.5) * 22;
+      const y = cl.y + (hashUnit(seed, 8) - 0.5) * 9;
+      bakeRock(t, x, y, r, seed);
+    }
+  });
+  for (let i = 0; i < 30; i++) {
+    const x = Math.round(SLAB.left + 14 + hashUnit(538, i) * (SLAB.right - SLAB.left - 28));
+    const y = Math.round(SLAB.front + 6 + hashUnit(539, i) * 48);
+    if (!insideFace(x, y + 1)) continue;
+    px(t, x, y, C.stone1);
+    px(t, x, y + 1, C.soil0);
+  }
+}
+
+// An open coffin, seen from above where the face cuts it, with its occupant.
+const COFFIN = { x: 96, y: 199, w: 58, h: 17 };
 
 function bakeCoffin(t: Target): void {
   t.pen = MAT.face;
   const { x, y, w, h } = COFFIN;
-  const shoulder = 12;
-  const outline = (inset: number, c: number) => {
-    for (let i = inset; i < w - inset; i++) {
-      const taper = i < shoulder ? (i / shoulder) * 2 : 2 - ((i - shoulder) / (w - shoulder)) * 3;
-      const top = Math.round(y + 2 - taper) + inset;
-      const bot = Math.round(y + h - 2 + taper * 0.4) - inset;
-      for (let j = top; j <= bot; j++) px(t, x + i, j, c);
+  const hex = (i: number) => [
+    x + i, y + h * 0.3 + i * 0.6,
+    x + w * 0.27, y + i,
+    x + w - i, y + h * 0.2 + i * 0.6,
+    x + w - i, y + h * 0.8 - i * 0.6,
+    x + w * 0.27, y + h - i,
+    x + i, y + h * 0.7 - i * 0.6,
+  ];
+  poly(t, hex(0), C.wood0);
+  poly(t, hex(1), C.wood2);
+  poly(t, hex(2.2), C.wood1);
+  poly(t, hex(3), C.ink);
+  const cy = y + Math.floor(h / 2);
+  const bone = { o: C.stone2, h: C.haze, x: C.ink, d: C.stone1 };
+  stamp(t, SKULL, x + 4, cy - 3, bone);
+  for (let i = x + 12; i <= x + 33; i++) px(t, i, cy, i % 2 === 0 ? C.stone2 : C.stone1);
+  for (let r = 0; r < 5; r++) {
+    const rx = x + 14 + r * 3;
+    const reach = r < 4 ? 4 : 3;
+    for (let dy = 1; dy <= reach; dy++) {
+      const bend = dy === reach ? 1 : 0;
+      px(t, rx + bend, cy - dy, dy === 1 ? C.haze : C.stone2);
+      px(t, rx + bend, cy + dy, C.stone2);
     }
-  };
-  outline(0, C.wood0);
-  outline(1, C.wood2);
-  outline(2, C.ink);
-  stamp(t, SKULL, x + 4, y + 2, { o: C.stone2, x: C.ink, d: C.stone1 });
-  line(t, x + 11, y + 6, x + 34, y + 6, C.stone1);
-  for (let r = 0; r < 4; r++) {
-    px(t, x + 14 + r * 3, y + 5, C.stone2);
-    px(t, x + 14 + r * 3, y + 7, C.stone2);
   }
-  line(t, x + 34, y + 6, x + 41, y + 5, C.stone1);
-  line(t, x + 34, y + 7, x + 41, y + 8, C.stone1);
-  px(t, x + 42, y + 5, C.stone2);
-  px(t, x + 42, y + 8, C.stone2);
-  for (let i = 3; i < w - 4; i += 9) px(t, x + i, y + 1 + (i < shoulder ? 1 : 0), C.wood1);
+  line(t, x + 13, cy - 5, x + 27, cy - 6, C.stone1);
+  line(t, x + 13, cy + 5, x + 27, cy + 6, C.stone1);
+  stamp(t, HAND, x + 28, cy - 7, bone);
+  stamp(t, HAND, x + 28, cy + 5, bone);
+  stamp(t, PELVIS, x + 32, cy - 3, bone);
+  line(t, x + 36, cy - 2, x + w - 7, cy - 3, C.stone2);
+  line(t, x + 36, cy + 2, x + w - 7, cy + 3, C.stone2);
+  line(t, x + 37, cy - 1, x + w - 8, cy - 2, C.stone1);
+  px(t, x + 45, cy - 3, C.haze);
+  px(t, x + 45, cy + 3, C.haze);
+  stamp(t, FOOT, x + w - 7, cy - 5, bone);
+  stamp(t, FOOT, x + w - 7, cy + 2, bone);
+  // The lid, split and slid off the foot end.
+  line(t, x + w - 2, y - 2, x + w + 9, y + 4, C.wood2);
+  line(t, x + w - 2, y - 1, x + w + 9, y + 5, C.wood1);
+  line(t, x + w - 2, y, x + w + 8, y + 6, C.wood0);
 }
 
+// Lying face up, crown to the left.
 const SKULL = [
-  '.ooo.',
-  'odoxo',
-  'oooo.',
-  '.x.x.',
+  '..oho..',
+  '.ohhoo.',
+  'oohxooo',
+  'ooooxod',
+  'oohxooo',
+  '.oooood',
+  '..ooo..',
 ];
+
+const PELVIS = ['.oo.', 'oxxo', 'ooxo', 'oxxo', 'oooo', '.oo.', '....'];
+const HAND = ['dod', 'o.o'];
+const FOOT = ['oo.', 'ooo', 'oo.'];
 
 const BOTTLE = [
   '..d..',
@@ -237,10 +332,10 @@ function bakeTop(t: Target): void {
       const depth = (y - back) / Math.max(1, front - back);
       const n = fbm2(x / 9, y / 3, 561, 3) + (bayer(x, y) - 0.5) * 0.15;
       const dirt = fbm2(x / 13, y / 4, 563, 2);
-      let c = n < 0.4 ? C.moss0 : n < 0.62 ? C.moss1 : C.moss0;
-      if (dirt > 0.62) c = dirt > 0.7 ? C.soil2 : C.soil1;
-      if (depth < 0.12) c = C.moss1;
-      if (y === front) c = C.moss2;
+      let c = n < 0.42 ? C.navy : n < 0.6 ? C.moss0 : n < 0.7 ? C.indigo : C.moss1;
+      if (dirt > 0.6) c = dirt > 0.68 ? C.soil2 : C.soil1;
+      if (depth < 0.12) c = C.moss0;
+      if (y === front) c = C.moss1;
       px(t, x, y, c);
     }
   }

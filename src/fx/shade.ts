@@ -60,13 +60,18 @@ function flashLift(c: RGB, steps: number): RGB {
 
 // Firelight on a surface pulls it toward the light's color, scaled by how
 // much the surface reflects; the hue deepens from ember red at the fringe to
-// amber at the core, and only the core gets bright.
+// amber at the core, and only the core gets bright. Already-warm surfaces
+// (pumpkin rind, rust) brighten in their own hue instead, or they wash to tan.
 function warmLit(base: RGB, k: number): RGB {
   if (k <= 0) return base;
   const albedo = Math.min(1.1, 0.45 + 1.6 * luma(base));
   const l = warmLight(k);
   const a = Math.min(0.92, Math.pow(Math.min(1, k), 0.85) * 0.85);
-  return lerp3(base, [l[0] * albedo, l[1] * albedo, l[2] * albedo], a);
+  const tinted = lerp3(base, [l[0] * albedo, l[1] * albedo, l[2] * albedo], a);
+  const warmth = base[0] > 0 ? Math.min(1, Math.max(0, ((base[0] - base[2]) / base[0] - 0.3) / 0.5)) : 0;
+  if (warmth === 0) return tinted;
+  const gain = 1 + 2.4 * Math.min(1, k);
+  return lerp3(tinted, [base[0] * gain, base[1] * gain * 1.1, base[2] * gain], warmth);
 }
 
 // Emissive glass and flame step along the warm ramp with their own light, so

@@ -75,9 +75,9 @@ export const CLOUD_LAYERS: readonly CloudSpec[] = [
     phase: 0.25,
     top: 4,
     height: 70,
-    banks: 7,
-    thickness: [9, 18],
-    length: [90, 170],
+    banks: 8,
+    thickness: [12, 22],
+    length: [110, 190],
     tones: [C.clear, C.sky2, C.sky3, C.sky4, C.sky5, C.sky6],
   },
   {
@@ -87,55 +87,86 @@ export const CLOUD_LAYERS: readonly CloudSpec[] = [
     phase: 0.75,
     top: 34,
     height: 96,
-    banks: 8,
-    thickness: [12, 24],
-    length: [110, 220],
+    banks: 9,
+    thickness: [14, 28],
+    length: [130, 240],
     tones: [C.clear, C.sky1, C.sky2, C.sky3, C.sky4, C.sky5],
   },
 ];
 
-// Cloud banks are painted back to front as unions of cumulus lobes, so each
-// bank's bright rim reads against the bank behind it. Values are tones.
+interface Lobe {
+  readonly x: number;
+  readonly y: number;
+  readonly r: number;
+}
+
+const span = (range: readonly [number, number], k: number) => range[0] + k * (range[1] - range[0]);
+
+// Each bank is a row of cumulus lobes sitting on a flat, ragged base. Lobes
+// are painted top-down so a lower lobe's lit crown cuts across the shaded
+// belly of the one above it, which is what draws the billow contours.
+function bankLobes(spec: CloudSpec, b: number, cx: number, base: number): Lobe[] {
+  const r = (k: number) => hashUnit(spec.seed, b, k);
+  const len = span(spec.length, r(1));
+  const thick = span(spec.thickness, r(2));
+  const lobes: Lobe[] = [];
+  const n = 7 + Math.floor(r(4) * 6);
+  for (let l = 0; l < n; l++) {
+    const along = (l + 0.5 + (r(20 + l) - 0.5) * 0.7) / n;
+    const taper = 1 - Math.abs(along - 0.5) * 1.3;
+    const rad = thick * (0.45 + 0.45 * r(10 + l)) * (0.45 + 0.55 * taper);
+    lobes.push({ x: cx - len / 2 + len * along, y: base - rad * (0.2 + 0.4 * r(30 + l)), r: rad });
+  }
+  const crowns = 1 + Math.floor(r(5) * 3);
+  for (let l = 0; l < crowns; l++) {
+    const rad = thick * (0.35 + 0.25 * r(40 + l));
+    const x = cx + (r(50 + l) - 0.5) * len * 0.45;
+    lobes.push({ x, y: base - thick * (0.55 + 0.3 * r(60 + l)), r: rad });
+  }
+  return lobes.sort((a, z) => a.y - z.y);
+}
+
 function bakeCloudStrip(spec: CloudSpec): Uint8Array {
   const { width: w, height: h, seed } = spec;
   const strip = new Uint8Array(w * h);
-  const top = new Float32Array(w);
-  const bottom = new Float32Array(w);
+  const put = (x: number, y: number, tone: number) => {
+    if (y >= 0 && y < h) strip[y * w + (((x % w) + w) % w)] = tone;
+  };
   for (let b = 0; b < spec.banks; b++) {
-    const r = (k: number) => hashUnit(seed, b, k);
-    const cx = ((b + r(0) * 0.6) / spec.banks) * w;
-    const len = spec.length[0] + r(1) * (spec.length[1] - spec.length[0]);
-    const thick = spec.thickness[0] + r(2) * (spec.thickness[1] - spec.thickness[0]);
-    const base = h * (0.35 + 0.55 * r(3));
-    top.fill(Infinity);
-    bottom.fill(-Infinity);
-    const lobes = 4 + Math.floor(r(4) * 5);
-    for (let l = 0; l < lobes; l++) {
-      const lr = len * (0.12 + 0.16 * r(10 + l));
-      const lx = cx - len / 2 + lr + (len - 2 * lr) * r(20 + l);
-      const lh = thick * (0.45 + 0.55 * r(30 + l)) * (1 - 0.6 * Math.abs(lx - cx) / len);
-      for (let dx = -Math.ceil(lr); dx <= Math.ceil(lr); dx++) {
-        const k = 1 - (dx / lr) ** 2;
-        if (k <= 0) continue;
-        const col = ((Math.round(lx) + dx) % w + w) % w;
-        const y = base - lh * Math.sqrt(k);
-        top[col] = Math.min(top[col], y);
-        const under = base + 2 + thick * 0.18 * k + fbm1((lx + dx) / 9, seed + b, 2) * 3;
-        bottom[col] = Math.max(bottom[col], under);
+    const cx = ((b + hashUnit(seed, b, 0) * 0.6) / spec.banks) * w;
+    const base = h * (0.4 + 0.5 * hashUnit(seed, b, 3));
+    const thick = span(spec.thickness, hashUnit(seed, b, 2));
+    const under = (x: number) => base + 1 + fbm1(x / 6, seed + b, 3) * 2.5;
+    let left = Infinity;
+    let right = -Infinity;
+    for (const lobe of bankLobes(spec, b, cx, base)) {
+      const ry = lobe.r * 0.66;
+      left = Math.min(left, lobe.x - lobe.r);
+      right = Math.max(right, lobe.x + lobe.r);
+      for (let y = Math.floor(lobe.y - ry); y <= Math.ceil(lobe.y + ry); y++) {
+        for (let x = Math.floor(lobe.x - lobe.r); x <= Math.ceil(lobe.x + lobe.r); x++) {
+          const nx = (x - lobe.x) / lobe.r;
+          const ny = (y - lobe.y) / ry;
+          const d2 = nx * nx + ny * ny;
+          const floor = under(x);
+          if (d2 > 1 || y > floor) continue;
+          const height = Math.min(1, (floor - y) / thick);
+          let s = 0.12 + 0.55 * height - 0.06 * nx;
+          if (ny < -0.15) s += 0.12;
+          if (d2 > 0.62 && ny < -0.3) s += 0.3;
+          if (floor - y < 1.5) s = 0;
+          const tone = 1 + Math.floor(s * 3.1 + (bayer(x, y) - 0.5) * 0.45);
+          put(x, y, tone < 1 ? 1 : tone > 4 ? 4 : tone);
+        }
       }
     }
-    for (let col = 0; col < w; col++) {
-      if (top[col] === Infinity) continue;
-      const y0 = Math.max(0, Math.round(top[col]));
-      const y1 = Math.min(h - 1, Math.round(bottom[col]));
-      for (let y = y0; y <= y1; y++) {
-        const d = y - top[col];
-        const fromBottom = bottom[col] - y;
-        let tone = d < 1.2 ? 4 : d < 3.5 ? 3 : 2;
-        if (fromBottom < 2.5) tone = 1;
-        else if (tone === 2 && fromBottom < 5 && bayer(col, y) < 0.5) tone = 1;
-        else if (tone === 3 && d > 2.2 && bayer(col, y) < 0.5) tone = 2;
-        strip[y * w + col] = tone;
+    // Rain hanging under the base, sparse and fading with depth.
+    for (let x = Math.ceil(left) + 4; x < right - 4; x++) {
+      const fall = Math.max(0, fbm1(x / 11, seed + 90 + b, 2) - 0.45) / 0.55;
+      const reach = Math.floor(fall * 16);
+      const y0 = Math.ceil(under(x)) + 1;
+      for (let d = 0; d < reach; d++) {
+        if (bayer(x, y0 + d) < 0.55 * (1 - d / reach)) put(x, y0 + d, 1);
       }
     }
   }

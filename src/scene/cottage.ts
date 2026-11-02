@@ -1,8 +1,9 @@
 import { HEIGHT, WIDTH } from '../contract.ts';
 import type { Draw, Frame } from '../frame.ts';
 import { envelope, hashUnit, smoothstep } from '../loop.ts';
+import { fbm2 } from '../noise.ts';
 import { C } from '../palette.ts';
-import { bayer, createTarget, disc, hline, line, MAT, px, rect, stamp, vline, type Target } from '../raster.ts';
+import { bayer, createTarget, disc, hline, line, MAT, px, rect, stamp, stroke, vline, type Target } from '../raster.ts';
 
 // Drawn upright, then sheared: each row shifts right by LEAN px per px of
 // height above the sill, so the whole house leans like it is tired.
@@ -15,7 +16,9 @@ export function leanX(x: number, y: number): number {
 
 const WALL = { x0: 194, x1: 268, top: 146 };
 const UPPER = { x0: 190, x1: 272, top: 113, bottom: 145 };
-const ROOF = { cx: 231, apex: 30, eave: 113, half: 50, bend: 14 };
+// A witch hat: concave sides, a brim that flares over the last rows, and a
+// crown pushed off-centre so the tip can flop over to the right.
+const ROOF = { cx: 231, apex: 30, eave: 113, half: 46, brim: 7, bend: 16 };
 
 interface Window {
   readonly x: number;
@@ -33,54 +36,61 @@ export const WINDOWS: readonly Window[] = [
 export const ATTIC = { x: 233, y: 82, r: 5 };
 export const DOOR = { x: 223, y: 150, w: 14, h: 31 };
 export const WALL_LANTERN = { x: 242, y: 156 };
-const CHIMNEY = { x: 258, top: 46, w: 8, base: 84 };
+// The lower part is drawn under the roof, so it rises out of the slope.
+const CHIMNEY = { x: 248, top: 52, w: 7, base: 92 };
 
-export const CHIMNEY_TOP = { x: leanX(CHIMNEY.x + CHIMNEY.w / 2 + 3, CHIMNEY.top), y: CHIMNEY.top - 1 };
+export const CHIMNEY_TOP = {
+  x: leanX(CHIMNEY.x + Math.floor((CHIMNEY.base - CHIMNEY.top) / 10) + CHIMNEY.w / 2, CHIMNEY.top),
+  y: CHIMNEY.top - 4,
+};
 
 // Where roof runoff pours off in thin streams, in world space.
+function roofHalf(k: number): number {
+  const flare = k > 0.86 ? ROOF.brim * ((k - 0.86) / 0.14) ** 2 : 0;
+  return 1.5 + ROOF.half * (0.22 * k + 0.78 * k ** 2.3) + flare;
+}
+
+function roofCenter(k: number): number {
+  return ROOF.cx + ROOF.bend * (1 - k) ** 2.2;
+}
+
+const BRIM_HALF = roofHalf(1);
+
 export const EAVE_STREAMS: readonly { x: number; y: number; ground: number }[] = [
-  { x: leanX(ROOF.cx - ROOF.half - 1, ROOF.eave), y: ROOF.eave + 1, ground: 179 },
-  { x: leanX(ROOF.cx + ROOF.half + 1, ROOF.eave), y: ROOF.eave + 1, ground: 180 },
+  { x: leanX(ROOF.cx - BRIM_HALF, ROOF.eave), y: ROOF.eave + 1, ground: 179 },
+  { x: leanX(ROOF.cx + BRIM_HALF, ROOF.eave), y: ROOF.eave + 1, ground: 180 },
   { x: leanX(UPPER.x0 - 1, UPPER.bottom), y: UPPER.bottom + 2, ground: 181 },
 ];
 
-export const EAVE_DRIPS: readonly { x: number; y: number }[] = [-38, -21, -6, 9, 27, 41].map((dx) => ({
+export const EAVE_DRIPS: readonly { x: number; y: number }[] = [-44, -27, -9, 8, 26, 45].map((dx) => ({
   x: leanX(ROOF.cx + dx, ROOF.eave),
   y: ROOF.eave + 2,
 }));
 
-function roofHalf(k: number): number {
-  return ROOF.half * k ** 1.55 + 1;
-}
+const SHINGLE_ROW = 4;
+const ROOF_RAMP = [C.night, C.deep, C.navy, C.indigo, C.slate, C.steel];
 
-function roofCenter(k: number): number {
-  return ROOF.cx + ROOF.bend * (1 - k) ** 2.4;
-}
-
-const PATCHES = [
-  { x: 205, y: 96, w: 9, h: 7, kind: 'moss' },
-  { x: 244, y: 70, w: 7, h: 6, kind: 'planks' },
-  { x: 222, y: 104, w: 10, h: 5, kind: 'moss' },
-  { x: 234, y: 52, w: 5, h: 6, kind: 'planks' },
-] as const;
-
-function shingle(x: number, y: number, k: number): number {
-  const row = Math.floor((y - ROOF.apex) / 3);
-  const off = row % 2 === 0 ? 0 : 2;
-  const col = Math.floor((x + off) / 5);
-  const inRow = (y - ROOF.apex) % 3;
+// Fish-scale shingles laid on a cone seen from slightly above: rows sag in the
+// middle, columns narrow toward the silhouette, and shade follows the curve.
+function shingle(x: number, y: number, k: number, cx: number, hw: number): number {
+  const nx = Math.max(-1, Math.min(1, (x + 0.5 - cx) / hw));
+  const bow = Math.min(4, hw * 0.09) * (1 - nx * nx);
+  const along = y - ROOF.apex - bow;
+  const row = Math.floor(along / SHINGLE_ROW);
+  const v = along - row * SHINGLE_ROW;
+  const around = (Math.asin(nx) / Math.PI + 0.5) * Math.max(3, Math.round((Math.PI * hw) / 5)) + (row & 1) * 0.5;
+  const col = Math.floor(around);
+  const u = around - col;
   const h = hashUnit(601, row, col);
-  for (const p of PATCHES) {
-    if (x >= p.x && x < p.x + p.w && y >= p.y && y < p.y + p.h) {
-      if (p.kind === 'planks') return (x - p.x) % 3 === 0 ? C.wood0 : y % 2 === 0 ? C.wood2 : C.wood1;
-      return inRow === 2 ? C.moss0 : h < 0.5 ? C.moss1 : C.moss2;
-    }
+  const facing = Math.sqrt(1 - nx * nx);
+  const s = 0.12 + 0.5 * facing + 0.16 * nx + 0.14 * (1 - k) + (h - 0.5) * 0.3 + (v < 1 ? 0.12 : 0);
+  let tone = Math.max(1, Math.min(ROOF_RAMP.length - 1, Math.floor(s * ROOF_RAMP.length)));
+  const lip = SHINGLE_ROW - 1 - 1.4 * (2 * u - 1) ** 2;
+  if (v >= lip) tone = Math.max(0, tone - 2);
+  else if (fbm2(x / 7, y / 5, 640, 3) > 0.74 - 0.12 * k) {
+    return v < 1 && h > 0.5 ? C.moss2 : v >= lip - 1 ? C.moss0 : C.moss1;
   }
-  if (inRow === 2) return C.night;
-  if ((x + off) % 5 === 0 && h < 0.7) return C.deep;
-  const lit = x > roofCenter(k) ? 1 : 0;
-  if (h < 0.12) return C.deep;
-  return h < 0.55 - lit * 0.25 ? C.navy : h < 0.93 ? C.indigo : C.slate;
+  return ROOF_RAMP[tone];
 }
 
 function bakeRoof(t: Target): void {
@@ -91,41 +101,53 @@ function bakeRoof(t: Target): void {
     const x0 = Math.round(cx - hw);
     const x1 = Math.round(cx + hw);
     for (let x = x0; x <= x1; x++) {
-      const edge = x === x0 || x === x1;
-      px(t, x, y, edge ? C.night : shingle(x, y, k));
+      const edge = x === x0 || x === x1 || y === ROOF.eave;
+      px(t, x, y, edge ? C.night : shingle(x, y, k, cx, hw));
     }
   }
-  // The floppy tip of the hat.
-  const tipX = Math.round(roofCenter(0));
-  line(t, tipX, ROOF.apex, tipX + 4, ROOF.apex - 3, C.navy);
-  line(t, tipX + 4, ROOF.apex - 3, tipX + 9, ROOF.apex - 2, C.navy);
-  line(t, tipX + 1, ROOF.apex, tipX + 5, ROOF.apex - 2, C.indigo);
-  px(t, tipX + 10, ROOF.apex - 1, C.night);
-  hline(t, ROOF.cx - ROOF.half - 2, ROOF.cx + ROOF.half + 2, ROOF.eave, C.wood0);
-  hline(t, ROOF.cx - ROOF.half - 1, ROOF.cx + ROOF.half + 1, ROOF.eave + 1, C.night);
+  // The crown leans right, then the tip curls back left, clear of the smoke.
+  const tx = roofCenter(0);
+  const ty = ROOF.apex;
+  const tip = [tx, ty + 3, tx + 1, ty - 3, tx - 2, ty - 8, tx - 7, ty - 10, tx - 11, ty - 8, tx - 12, ty - 4];
+  const radius = [2.7, 2.4, 2.0, 1.6, 1.1, 0.6];
+  for (const [c, grow] of [[C.night, 1], [C.navy, 0], [C.indigo, -0.6]] as const) {
+    for (let i = 0; i + 3 < tip.length; i += 2) {
+      const r0 = Math.max(0.3, radius[i >> 1] + grow);
+      const r1 = Math.max(0.3, radius[(i >> 1) + 1] + grow);
+      stroke(t, tip[i] - (grow < 0 ? 0.6 : 0), tip[i + 1] - (grow < 0 ? 0.6 : 0), tip[i + 2], tip[i + 3], r0, r1, c);
+    }
+  }
+  const brim = Math.round(BRIM_HALF);
+  hline(t, ROOF.cx - brim + 1, ROOF.cx + brim - 1, ROOF.eave + 1, C.wood0);
+  hline(t, ROOF.cx - brim + 4, ROOF.cx + brim - 4, ROOF.eave + 2, C.night);
 }
 
 function bakeChimney(t: Target): void {
   const { x, top, w, base } = CHIMNEY;
   for (let y = top; y <= base; y++) {
-    const shift = Math.floor((base - y) / 9);
+    const shift = Math.floor((base - y) / 10);
     const row = Math.floor((y - top) / 3);
     for (let i = 0; i < w; i++) {
       const mortar = (y - top) % 3 === 2 || (i + (row % 2) * 2) % 4 === 0;
       const c = mortar ? C.soil1 : hashUnit(611, row, i >> 2) < 0.5 ? C.stone0 : C.stone1;
-      px(t, x + i + shift, y, i === 0 ? C.soil0 : c);
+      px(t, x + i + shift, y, i === 0 ? C.soil0 : i === w - 1 && !mortar ? C.stone2 : c);
     }
   }
-  const capShift = Math.floor((base - top) / 9);
+  const capShift = Math.floor((base - top) / 10);
   hline(t, x - 1 + capShift, x + w + capShift, top - 1, C.stone2);
   hline(t, x - 1 + capShift, x + w + capShift, top, C.stone0);
-  rect(t, x + 2 + capShift, top - 3, 4, 2, C.stone0);
-  hline(t, x + 2 + capShift, x + 5 + capShift, top - 4, C.soil0);
+  rect(t, x + 2 + capShift, top - 3, 3, 2, C.stone0);
+  hline(t, x + 2 + capShift, x + 4 + capShift, top - 4, C.soil0);
 }
 
+// Limewash weathered by rain: soft blotches, and streaks under the sills.
 function plaster(x: number, y: number): number {
-  const n = hashUnit(621, x >> 1, y >> 1);
-  return n < 0.08 ? C.navy : n < 0.8 ? C.indigo : C.slate;
+  const n = fbm2(x / 8, y / 6, 621, 3);
+  const streak = fbm2(x / 1.6, y / 16, 623, 2);
+  if (streak > 0.7 && bayer(x, y) < 0.75) return C.navy;
+  if (n > 0.6 && bayer(x, y) < (n - 0.6) * 4) return C.slate;
+  if (n < 0.34 && bayer(x, y) < (0.34 - n) * 4) return C.navy;
+  return C.indigo;
 }
 
 function bakeTimberWall(t: Target, x0: number, x1: number, y0: number, y1: number): void {
@@ -162,12 +184,22 @@ function bakeWindow(t: Target, w: Window, curtain: boolean): void {
   hline(t, x - 1, x + w.w, y + w.h + 2, C.soil1);
 }
 
+// Hanging from its top hinge only, so it has swung a little crooked.
 function bakeShutter(t: Target, w: Window): void {
   const x = w.x + w.w + 2;
-  for (let j = 0; j < w.h + 1; j++) {
-    const skew = Math.floor(j / 6);
-    for (let i = 0; i < 4; i++) px(t, x + i + skew, w.y + j, i === 0 || j % 5 === 0 ? C.wood0 : C.wood1);
+  const sw = 6;
+  const sh = w.h + 1;
+  for (let j = 0; j < sh; j++) {
+    const skew = Math.floor(j / 5);
+    for (let i = 0; i < sw; i++) {
+      const rail = j === 1 || j === sh - 2;
+      const diagonal = Math.abs(i - Math.round(((sh - 2 - j) / (sh - 3)) * (sw - 1))) < 1 && j > 1 && j < sh - 2;
+      const frame = i === 0 || i === sw - 1 || j === 0 || j === sh - 1;
+      const c = frame ? C.wood0 : rail || diagonal ? C.wood1 : i % 2 === 0 ? C.wood2 : C.lit0;
+      px(t, x + i + skew, w.y + j, c);
+    }
   }
+  px(t, x - 1, w.y + 1, C.stone1);
 }
 
 function bakeDoor(t: Target): void {
@@ -263,8 +295,8 @@ function bakeUpright(t: Target): void {
   bakeDoor(t);
   bakeLantern(t);
   bakeFoundation(t);
-  bakeRoof(t);
   bakeChimney(t);
+  bakeRoof(t);
   disc(t, ATTIC.x, ATTIC.y, ATTIC.r + 1, C.wood0);
   disc(t, ATTIC.x, ATTIC.y, ATTIC.r - 0.4, C.glow2);
   disc(t, ATTIC.x - 1, ATTIC.y - 1, ATTIC.r - 2, C.glow3);
