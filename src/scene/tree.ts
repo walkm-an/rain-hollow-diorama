@@ -77,24 +77,26 @@ export function lanternAngle(u: number): number {
 }
 
 export function lanternX(u: number): number {
-  return LANTERN.pivotX + Math.sin(lanternAngle(u)) * (LANTERN.rope + 4);
+  return LANTERN.pivotX + Math.sin(lanternAngle(u)) * (LANTERN.rope + 5);
 }
 
 export function lanternY(u: number): number {
-  return LANTERN.pivotY + Math.cos(lanternAngle(u)) * (LANTERN.rope + 4);
+  return LANTERN.pivotY + Math.cos(lanternAngle(u)) * (LANTERN.rope + 5);
 }
 
 const LAMP = [
-  '.ccc.',
-  'fffff',
-  'fghgf',
-  'fgggf',
-  'fhghf',
-  'fffff',
-  '..f..',
+  '...c...',
+  '..ccc..',
+  '.fffff.',
+  '.fhwhf.',
+  'fghwhgf',
+  'fghhhgf',
+  'fgggggf',
+  '.fffff.',
+  '...f...',
 ];
 
-const LAMP_KEY = { c: C.ink, f: C.night, g: C.glow4, h: C.glow3 };
+const LAMP_KEY = { c: C.ink, f: C.night, g: C.glow2, h: C.glow3, w: C.glow5 };
 
 export function lanternLayer(): Draw {
   return (f: Frame) => {
@@ -102,6 +104,6 @@ export function lanternLayer(): Draw {
     const tx = LANTERN.pivotX + Math.sin(a) * LANTERN.rope;
     const ty = LANTERN.pivotY + Math.cos(a) * LANTERN.rope;
     line(f.target, LANTERN.pivotX, LANTERN.pivotY, tx, ty, C.deep);
-    stamp(f.target, LAMP, Math.round(tx) - 2, Math.round(ty), LAMP_KEY);
+    stamp(f.target, LAMP, Math.round(tx) - 3, Math.round(ty), LAMP_KEY);
   };
 }

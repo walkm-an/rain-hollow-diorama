@@ -43,14 +43,14 @@ export const EMITTERS: readonly Emitter[] = [
     seed: 1501,
     origins: [CHIMNEY_TOP],
     spread: 1,
-    count: 15,
+    count: 20,
     life: 10,
     rise: 6.5,
-    wind: 3.2,
+    wind: 3.6,
     wobble: 2.5,
     wobbleCycles: 1,
-    size: [1.6, 10],
-    density: 0.75,
+    size: [2, 11],
+    density: 0.85,
     colors: SMOKE,
   },
   {
@@ -189,10 +189,10 @@ function drawSpark(f: Frame, e: Emitter, p: Particle): boolean {
 function drawPuff(f: Frame, e: Emitter, p: Particle): boolean {
   const t = p.age * p.life;
   const phase = attr(p, 2) * Math.PI * 2;
-  const cx = p.ox + e.wind * t * (0.6 + 0.4 * p.age) + e.wobble * Math.sin(phase + Math.PI * 2 * e.wobbleCycles * p.age);
-  const cy = p.oy - e.rise * t * (0.85 + 0.3 * attr(p, 1));
+  const cx = p.ox + e.wind * t * (0.2 + 1.1 * p.age) + e.wobble * Math.sin(phase + Math.PI * 2 * e.wobbleCycles * p.age);
+  const cy = p.oy - e.rise * t * (0.85 + 0.3 * attr(p, 1)) * (1 - 0.25 * p.age);
   const r = e.size[0] + (e.size[1] - e.size[0]) * Math.pow(p.age, 0.7) * (0.8 + 0.4 * attr(p, 3));
-  const cover = e.density * Math.min(1, p.age / 0.12) * Math.pow(1 - p.age, 1.4);
+  const cover = e.density * Math.min(1, p.age / 0.1) * Math.pow(1 - p.age, 0.9);
   if (cover < 0.04) return false;
   const data = f.target.data;
   const x0 = Math.max(0, Math.floor(cx - r));
@@ -211,8 +211,10 @@ function drawPuff(f: Frame, e: Emitter, p: Particle): boolean {
       const d2 = dx * dx + dy * dy;
       if (d2 > r2) continue;
       const k = 1 - d2 / r2;
-      if (BAYER[brow | (x & 3)] < cover * (0.25 + 0.75 * k)) {
-        data[y * WIDTH + x] = dy < -r * 0.15 ? light : dark;
+      const dense = cover * (0.3 + 1.1 * k);
+      const b = BAYER[brow | (x & 3)];
+      if (b < dense) {
+        data[y * WIDTH + x] = b < dense * 0.5 && dy < r * 0.25 ? light : dark;
         any = true;
       }
     }

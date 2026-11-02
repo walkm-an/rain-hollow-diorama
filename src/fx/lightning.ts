@@ -104,7 +104,7 @@ const RIM = (() => {
   const out = new Uint8Array(COLOR_COUNT);
   for (let i = 0; i < COLOR_COUNT; i++) out[i] = i;
   const lift: [number, number][] = [
-    [C.sky1, C.sky4], [C.sky2, C.sky5], [C.sky3, C.sky6], [C.sky4, C.sky7], [C.sky5, C.sky7],
+    [C.sky1, C.sky2], [C.sky2, C.sky3], [C.sky3, C.sky4], [C.sky4, C.sky5], [C.sky5, C.sky6],
     [C.ink, C.slate], [C.night, C.slate], [C.deep, C.steel], [C.navy, C.steel], [C.indigo, C.haze],
     [C.slate, C.haze], [C.steel, C.pale], [C.stone0, C.stone2], [C.stone1, C.haze], [C.stone2, C.pale],
     [C.moss0, C.moss2], [C.moss1, C.stone2], [C.wood0, C.stone0], [C.wood1, C.stone1], [C.soil1, C.stone1],

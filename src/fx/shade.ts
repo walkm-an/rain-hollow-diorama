@@ -32,7 +32,7 @@ function luma(c: RGB): number {
 // warm: gain on the light band. flash: ramp steps lifted per lightning level.
 const RESPONSE: Record<Response, { warm: number; flash: readonly number[] }> = {
   clear: { warm: 0, flash: [0, 0, 0, 0] },
-  sky: { warm: 0, flash: [0, 1, 2, 2] },
+  sky: { warm: 0.45, flash: [0, 1, 2, 2] },
   matte: { warm: 1, flash: [0, 0, 1, 1] },
   wet: { warm: 1.35, flash: [0, 1, 1, 2] },
   glow: { warm: 0, flash: [0, 0, 0, 0] },
