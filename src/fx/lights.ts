@@ -9,13 +9,8 @@ import { pumpkinCenter, PUMPKINS } from '../scene/pumpkins.ts';
 import { groundFront } from '../scene/slab.ts';
 import { lanternX, lanternY } from '../scene/tree.ts';
 
-// `area` lights glow around a rectangle (w = h = 0 is a point); `spill` lights
-// only paint a wedge on the ground in front of an opening.
-type Kind = 'area' | 'spill';
-
-interface Light {
+interface LightBase {
   readonly name: string;
-  readonly kind: Kind;
   readonly x: number;
   readonly y: number;
   readonly w: number;
@@ -23,31 +18,60 @@ interface Light {
   // Screen y where the light's vertical line meets the ground plane.
   readonly foot: number;
   readonly radius: number;
+  // Exponent on (1 - d / radius): 2 is a soft pool; lower holds its strength
+  // farther out and still ends at the radius, so a wide light stays a pocket.
+  readonly falloff: number;
   readonly power: number;
-  // How much reaches standing surfaces and open air; a window lights the
-  // ground and the rain in front of it far more than the wall around it.
-  readonly walls: number;
-  readonly air: number;
   readonly seed: number;
   // Octaves of loop noise: [cycles per loop, relative depth].
   readonly flicker: readonly (readonly [number, number])[];
   readonly follow?: { readonly x: (u: number) => number; readonly y: (u: number) => number };
 }
 
-const CANDLE: Light['flicker'] = [
-  [420, 0.2],
-  [960, 0.1],
-  [24, 0.08],
+// Glows around a rectangle (w = h = 0 is a point).
+interface AreaLight extends LightBase {
+  readonly kind: 'area';
+  // How much reaches standing surfaces and open air; a window lights the
+  // ground and the rain in front of it far more than the wall around it.
+  readonly walls: number;
+  readonly air: number;
+}
+
+// Paints only a wedge on the ground in front of an opening, `fan` px wider
+// on each side per px it travels toward the viewer, and over the cut lip.
+interface SpillLight extends LightBase {
+  readonly kind: 'spill';
+  readonly fan: number;
+}
+
+type Light = AreaLight | SpillLight;
+
+// Cycles are per 120 s loop, so 120 cycles is 1 Hz. Windows stay well under
+// that, with a small depth, so a band flips only now and then.
+const WINDOW: Light['flicker'] = [
+  [36, 0.05],
+  [12, 0.03],
 ];
-const HEARTH: Light['flicker'] = [
-  [180, 0.16],
-  [420, 0.07],
+// Lanterns and pumpkins waver slowly. The 8-cycle octave is the occasional gutter.
+const CANDLE: Light['flicker'] = [
+  [72, 0.08],
+  [24, 0.05],
+  [8, 0.1],
+];
+// The fire breathes between 0.4 Hz and 2.5 Hz. Nothing faster, or the bands strobe.
+const FIRE_FLICKER: Light['flicker'] = [
+  [48, 0.1],
+  [180, 0.1],
+  [300, 0.05],
 ];
 
 const POINT = { w: 0, h: 0 };
+const HOUSE_FOOT = 182;
+const LOWER_WINDOWS = [0, 1];
 
-function windowLight(i: number): Light {
+function windowLight(i: number): AreaLight {
   const w = WINDOWS[i];
+  const lower = LOWER_WINDOWS.includes(i);
   return {
     name: `window${i}`,
     kind: 'area',
@@ -55,13 +79,34 @@ function windowLight(i: number): Light {
     y: w.y,
     w: w.w,
     h: w.h,
-    foot: 182,
-    radius: i < 2 ? 18 : 13,
+    foot: HOUSE_FOOT,
+    radius: lower ? 18 : 13,
+    falloff: 2,
     power: 0.7,
     walls: 0.45,
     air: 0.8,
     seed: 40 + i,
-    flicker: HEARTH,
+    flicker: WINDOW,
+  };
+}
+
+// The patch a lower window throws on the ground in front of the house.
+function windowSpill(i: number): SpillLight {
+  const w = WINDOWS[i];
+  return {
+    name: `window${i} spill`,
+    kind: 'spill',
+    x: leanX(w.x, HOUSE_FOOT) + 1,
+    y: HOUSE_FOOT,
+    w: w.w - 2,
+    h: 0,
+    foot: HOUSE_FOOT,
+    radius: 32,
+    falloff: 1.8,
+    power: 0.65,
+    fan: 2.2,
+    seed: 40 + i,
+    flicker: WINDOW,
   };
 }
 
@@ -75,18 +120,16 @@ export const LIGHTS: readonly Light[] = [
     y: FIRE.y - 8,
     ...POINT,
     foot: FIRE.y,
-    radius: 74,
-    power: 1.0,
+    radius: 96,
+    falloff: 1.7,
+    power: 1.05,
     walls: 1,
-    air: 0.7,
+    air: 0.4,
     seed: 10,
-    flicker: [
-      [360, 0.15],
-      [840, 0.07],
-      [30, 0.12],
-    ],
+    flicker: FIRE_FLICKER,
   },
   ...WINDOWS.map((_, i) => windowLight(i)),
+  ...LOWER_WINDOWS.map(windowSpill),
   {
     name: 'attic',
     kind: 'area',
@@ -96,11 +139,12 @@ export const LIGHTS: readonly Light[] = [
     h: ATTIC.r * 2,
     foot: 182,
     radius: 10,
+    falloff: 2,
     power: 0.62,
     walls: 0.4,
     air: 0.8,
     seed: 50,
-    flicker: HEARTH,
+    flicker: WINDOW,
   },
   {
     name: 'doorway',
@@ -111,26 +155,27 @@ export const LIGHTS: readonly Light[] = [
     h: DOOR.h,
     foot: DOOR.y + DOOR.h,
     radius: 14,
+    falloff: 2,
     power: 0.8,
     walls: 0.5,
     air: 0.8,
     seed: 51,
-    flicker: HEARTH,
+    flicker: WINDOW,
   },
   {
     name: 'door spill',
     kind: 'spill',
-    x: doorX + 3,
+    x: doorX + 2,
     y: DOOR.y + DOOR.h,
-    w: DOOR.w - 7,
+    w: DOOR.w - 5,
     h: 0,
     foot: DOOR.y + DOOR.h,
-    radius: 34,
-    power: 0.9,
-    walls: 0,
-    air: 0,
+    radius: 44,
+    falloff: 1.8,
+    power: 1.15,
+    fan: 2.4,
     seed: 51,
-    flicker: HEARTH,
+    flicker: WINDOW,
   },
   {
     name: 'wall lantern',
@@ -138,8 +183,9 @@ export const LIGHTS: readonly Light[] = [
     x: leanX(WALL_LANTERN.x, WALL_LANTERN.y) + 1,
     y: WALL_LANTERN.y + 1,
     ...POINT,
-    foot: 182,
+    foot: HOUSE_FOOT,
     radius: 20,
+    falloff: 2,
     power: 0.8,
     walls: 0.8,
     air: 0.8,
@@ -153,10 +199,11 @@ export const LIGHTS: readonly Light[] = [
     y: Math.round(lanternY(0)),
     ...POINT,
     foot: 179,
-    radius: 34,
-    power: 0.95,
+    radius: 52,
+    falloff: 1.7,
+    power: 1.05,
     walls: 1,
-    air: 1,
+    air: 0.5,
     seed: 53,
     flicker: CANDLE,
     follow: { x: lanternX, y: lanternY },
@@ -170,7 +217,8 @@ export const LIGHTS: readonly Light[] = [
       y: Math.round(c.y),
       ...POINT,
       foot: Math.round(c.y + p.ry),
-      radius: 6 + p.rx * 1.6,
+      radius: 8 + p.rx * 2,
+      falloff: 2,
       power: 0.85,
       walls: 1,
       air: 0.7,
@@ -185,37 +233,44 @@ export const LIGHTS: readonly Light[] = [
     ...POINT,
     foot: farCabinWindow().y,
     radius: 5,
+    falloff: 2,
     power: 0.5,
     walls: 1,
     air: 1,
     seed: 70,
-    flicker: HEARTH,
+    flicker: WINDOW,
   },
 ];
 
-function falloff(d: number): number {
-  return d >= 1 ? 0 : (1 - d) * (1 - d);
+function falloff(l: Light, d: number): number {
+  return d >= 1 ? 0 : Math.pow(1 - d, l.falloff);
+}
+
+function lip(x: number, y: number): number {
+  return Math.max(0, 1 - (y - groundFront(x)) / 5) * 0.6;
 }
 
 // How much of a light reaches a pixel, from its material and position. The
 // ground uses a flattened, foot-anchored distance so pools lie on the plane;
 // the cut face only catches light on its lip.
+
 function reach(l: Light, scene: Scene, x: number, y: number): number {
   const mat = scene.mat[y * WIDTH + x];
   const dx = x < l.x ? l.x - x : x > l.x + l.w ? x - (l.x + l.w) : 0;
   if (l.kind === 'spill') {
-    if (mat !== MAT.ground || y < l.foot) return 0;
+    if (y < l.foot || (mat !== MAT.ground && mat !== MAT.face)) return 0;
     const dy = y - l.foot;
-    if (dx > 1 + dy * 1.7) return 0;
-    return falloff(Math.hypot(dy * 2.6, dx * 0.35) / l.radius);
+    if (dx > 1 + dy * l.fan) return 0;
+    const d = falloff(l, Math.hypot(dy * 2.6, dx * 0.35) / l.radius);
+    return mat === MAT.face ? d * lip(x, y) : d;
   }
   const dy = y < l.y ? l.y - y : y > l.y + l.h ? y - (l.y + l.h) : 0;
   if (mat === MAT.ground) {
     const lift = Math.max(0, l.foot - (l.y + l.h));
-    return falloff(Math.hypot(dx, (y - l.foot) * 2.6, lift) / l.radius);
+    return falloff(l, Math.hypot(dx, (y - l.foot) * 2.6, lift) / l.radius);
   }
-  const d = falloff(Math.hypot(dx, dy) / l.radius);
-  if (mat === MAT.face) return d * Math.max(0, 1 - (y - groundFront(x)) / 5) * 0.6;
+  const d = falloff(l, Math.hypot(dx, dy) / l.radius);
+  if (mat === MAT.face) return d * lip(x, y);
   if (mat === MAT.air) return d * l.air;
   return d * l.walls;
 }
