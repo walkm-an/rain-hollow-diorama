@@ -25,3 +25,6 @@ dist-ssr
 
 # user uploads (reference footage)
 uploads/
+
+# throwaway preview scripts
+.scratch/
