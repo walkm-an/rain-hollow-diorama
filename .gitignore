@@ -29,5 +29,8 @@ uploads/
 # throwaway preview scripts
 .scratch/
 
+# generated proof (npm run verify)
+artifacts/
+
 # local decision trails
 .audit/

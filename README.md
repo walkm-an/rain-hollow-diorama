@@ -1,3 +1,53 @@
-# New repo
+# Rain Hollow
 
-This repo was created by a Cursor cloud agent.
+[English](README.en.md)
+
+一段 120 秒一圈的像素万圣节夜景，给 10 小时 lo-fi 视频当循环封面。冷的雨夜，暖光只留在窗、门、灯笼和篝火里。所有像素都由代码画出，仓库里没有位图。内部分辨率 480×270，整屏用最近邻放大，1080p 下仍然是整像素。
+
+## 在本地看
+
+需要 Node.js 22。
+
+```bash
+npm install
+npm run dev
+```
+
+浏览器打开 http://127.0.0.1:47321 。按 F 进入全屏，按 H 显示当前时间和渲染耗时，按空格暂停或继续。
+
+地址上可以加参数。
+
+- `?t=41&paused=1` 停在第 41 秒。两次闪电分别在 41.0 秒和 97.5 秒。
+- `?hud=1` 打开左上角的帧信息。
+
+## 打成一个能直接打开的文件
+
+```bash
+npm run build
+```
+
+产物只有 `dist/index.html`。脚本已经内联进这个文件，双击它，或用 `file://` 打开，都能播放。
+
+## 检查循环和内存
+
+`render(t)` 只由时间 t 决定，周期是 120 秒。每种粒子的寿命都能整除 120，所以同一相位上的粒子数每圈都一样。t 和 t + 120 的像素相同，跨过 120 秒的那一帧和普通的一帧没有差别。
+
+```bash
+npm run verify
+```
+
+这条命令依次做构建、三张 1920×1080 截图、一段 10 秒的 mp4、循环像素对比，以及至少 5 分钟墙钟的加速模拟。结果写在 `artifacts/`。
+
+也可以分开跑。
+
+- `npm run shots` 截 t = 12、41、78 秒，写入 `artifacts/screenshots/`。
+- `npm run record` 从 t = 35 秒录 10 秒，包含第一次闪电，写入 `artifacts/recording-10s.mp4`。
+- `npm run record -- --start 0 --duration 120 --out artifacts/loop-120s.mp4` 导出完整的一圈，拿去循环播放即可。
+- `npm run loop-check` 对比 t 与 t + 120 的像素，并和普通的 1/60 秒步进比较循环点。
+- `npm run soak` 按 1/60 秒逐帧加速渲染至少 330 秒墙钟，检查堆内存、DOM 节点和粒子数。
+
+截图和录屏需要本机已安装 Google Chrome 和 ffmpeg。
+
+## 画面
+
+一块切开的浮空土块。从左到右是一小片墓地、歪斜的女巫小屋、南瓜地，以及吊着坩埚的篝火，黑猫坐在旁边的树桩上。烟从烟囱和火堆升起。雨分远、中、近三层落下。屋檐和土块底部往下滴水。
