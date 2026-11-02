@@ -54,7 +54,7 @@ function roofCenter(k: number): number {
   return ROOF.cx + ROOF.bend * (1 - k) ** 2.2;
 }
 
-const BRIM_HALF = roofHalf(1);
+const BRIM_HALF = Math.round(roofHalf(1));
 
 export const EAVE_STREAMS: readonly { x: number; y: number; ground: number }[] = [
   { x: leanX(ROOF.cx - BRIM_HALF, ROOF.eave), y: ROOF.eave + 1, ground: 179 },
@@ -117,9 +117,8 @@ function bakeRoof(t: Target): void {
       stroke(t, tip[i] - (grow < 0 ? 0.6 : 0), tip[i + 1] - (grow < 0 ? 0.6 : 0), tip[i + 2], tip[i + 3], r0, r1, c);
     }
   }
-  const brim = Math.round(BRIM_HALF);
-  hline(t, ROOF.cx - brim + 1, ROOF.cx + brim - 1, ROOF.eave + 1, C.wood0);
-  hline(t, ROOF.cx - brim + 4, ROOF.cx + brim - 4, ROOF.eave + 2, C.night);
+  hline(t, ROOF.cx - BRIM_HALF + 1, ROOF.cx + BRIM_HALF - 1, ROOF.eave + 1, C.wood0);
+  hline(t, ROOF.cx - BRIM_HALF + 4, ROOF.cx + BRIM_HALF - 4, ROOF.eave + 2, C.night);
 }
 
 function bakeChimney(t: Target): void {
