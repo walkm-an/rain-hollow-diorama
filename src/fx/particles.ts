@@ -1,6 +1,6 @@
 import { HEIGHT, WIDTH } from '../contract.ts';
 import type { Draw, Frame } from '../frame.ts';
-import { clock, hash, mix32, slot, type Clock, type Slot } from '../loop.ts';
+import { clock, hash, mix32, slot, smoothstep, type Clock, type Slot } from '../loop.ts';
 import { C, FIRE_RAMP } from '../palette.ts';
 import { BAYER } from '../raster.ts';
 import { CAULDRON, FIRE } from '../scene/campfire.ts';
@@ -30,11 +30,11 @@ interface Emitter {
   readonly wobble: number;
   readonly wobbleCycles: number;
   readonly size: readonly [number, number];
-  readonly density: number;
+  // Puffs: [lit top, body, underside].
   readonly colors: readonly number[];
 }
 
-const SMOKE = [C.stone2, C.stone1];
+const SMOKE = [C.stone2, C.stone1, C.stone0];
 
 export const EMITTERS: readonly Emitter[] = [
   {
@@ -43,14 +43,13 @@ export const EMITTERS: readonly Emitter[] = [
     seed: 1501,
     origins: [CHIMNEY_TOP],
     spread: 1,
-    count: 20,
+    count: 9,
     life: 10,
-    rise: 6.5,
-    wind: 3.6,
-    wobble: 2.5,
+    rise: 5.5,
+    wind: 4,
+    wobble: 2,
     wobbleCycles: 1,
-    size: [2, 11],
-    density: 0.85,
+    size: [2, 7.5],
     colors: SMOKE,
   },
   {
@@ -59,14 +58,13 @@ export const EMITTERS: readonly Emitter[] = [
     seed: 1511,
     origins: [{ x: FIRE.x + 1, y: CAULDRON.y - CAULDRON.ry - 3 }],
     spread: 3,
-    count: 9,
+    count: 5,
     life: 6,
-    rise: 8,
+    rise: 7,
     wind: 3.5,
-    wobble: 2,
+    wobble: 1.5,
     wobbleCycles: 1,
-    size: [2, 8],
-    density: 0.5,
+    size: [1.5, 4.5],
     colors: SMOKE,
   },
   {
@@ -75,15 +73,14 @@ export const EMITTERS: readonly Emitter[] = [
     seed: 1521,
     origins: [{ x: CAULDRON.x, y: CAULDRON.y - CAULDRON.ry - 1 }],
     spread: 5,
-    count: 7,
+    count: 6,
     life: 2.4,
     rise: 9,
     wind: 2.5,
-    wobble: 1.5,
+    wobble: 1,
     wobbleCycles: 1,
-    size: [1, 3.5],
-    density: 0.6,
-    colors: [C.pale, C.haze],
+    size: [1, 2.5],
+    colors: [C.pale, C.haze, C.steel],
   },
   {
     name: 'bubbles',
@@ -98,7 +95,6 @@ export const EMITTERS: readonly Emitter[] = [
     wobble: 0,
     wobbleCycles: 0,
     size: [1, 2],
-    density: 1,
     colors: [C.pale, C.moss2, C.haze],
   },
   {
@@ -114,7 +110,6 @@ export const EMITTERS: readonly Emitter[] = [
     wobble: 3,
     wobbleCycles: 1.5,
     size: [1, 1],
-    density: 1,
     colors: FIRE_RAMP,
   },
   {
@@ -130,7 +125,6 @@ export const EMITTERS: readonly Emitter[] = [
     wobble: 0,
     wobbleCycles: 0,
     size: [1, 2],
-    density: 1,
     colors: [C.rain4, C.rain3, C.rain2],
   },
   {
@@ -146,7 +140,6 @@ export const EMITTERS: readonly Emitter[] = [
     wobble: 0,
     wobbleCycles: 0,
     size: [1, 2],
-    density: 1,
     colors: [C.rain4, C.rain3, C.rain2],
   },
 ];
@@ -186,37 +179,120 @@ function drawSpark(f: Frame, e: Emitter, p: Particle): boolean {
   return put(f.target.data, x, y, c);
 }
 
+const TAU = Math.PI * 2;
+const MAX_LOBES = 5;
+const lobeX = new Float64Array(MAX_LOBES);
+const lobeY = new Float64Array(MAX_LOBES);
+const lobeR = new Float64Array(MAX_LOBES);
+// Erosion noise lattice in puff space: cells of ERODE_CELL px, offset so the
+// largest puff's coordinates stay non-negative.
+const ERODE_CELL = 3;
+const ERODE_OFFSET = 48;
+const ERODE_GRID = 34;
+const erodeLattice = new Float32Array(ERODE_GRID * ERODE_GRID);
+
+function fillErosion(h: number, rx0: number, ry0: number, rx1: number, ry1: number): void {
+  const i0 = Math.floor((rx0 + ERODE_OFFSET) / ERODE_CELL);
+  const i1 = Math.min(ERODE_GRID - 1, Math.floor((rx1 + ERODE_OFFSET) / ERODE_CELL) + 1);
+  const j0 = Math.floor((ry0 + ERODE_OFFSET) / ERODE_CELL);
+  const j1 = Math.min(ERODE_GRID - 1, Math.floor((ry1 + ERODE_OFFSET) / ERODE_CELL) + 1);
+  for (let j = j0; j <= j1; j++) {
+    for (let i = i0; i <= i1; i++) erodeLattice[j * ERODE_GRID + i] = mix32(h ^ Math.imul(i + 1, 0x85ebca6b) ^ Math.imul(j + 1, 0xc2b2ae35)) / 4294967296;
+  }
+}
+
+function erosion(rx: number, ry: number): number {
+  const gx = (rx + ERODE_OFFSET) / ERODE_CELL;
+  const gy = (ry + ERODE_OFFSET) / ERODE_CELL;
+  const i = Math.floor(gx);
+  const j = Math.floor(gy);
+  let fx = gx - i;
+  let fy = gy - j;
+  fx = fx * fx * (3 - 2 * fx);
+  fy = fy * fy * (3 - 2 * fy);
+  const o = j * ERODE_GRID + i;
+  const top = erodeLattice[o] + (erodeLattice[o + 1] - erodeLattice[o]) * fx;
+  const bottom = erodeLattice[o + ERODE_GRID] + (erodeLattice[o + ERODE_GRID + 1] - erodeLattice[o + ERODE_GRID]) * fx;
+  return top + (bottom - top) * fy;
+}
+
+// A billow of 3-5 overlapping lobes around an integer anchor. Lobes, rim
+// dither and erosion are all in anchor-relative coordinates, so the whole
+// puff moves as one body instead of sliding through a screen-fixed pattern.
 function drawPuff(f: Frame, e: Emitter, p: Particle): boolean {
   const t = p.age * p.life;
-  const phase = attr(p, 2) * Math.PI * 2;
-  const cx = p.ox + e.wind * t * (0.2 + 1.1 * p.age) + e.wobble * Math.sin(phase + Math.PI * 2 * e.wobbleCycles * p.age);
-  const cy = p.oy - e.rise * t * (0.85 + 0.3 * attr(p, 1)) * (1 - 0.25 * p.age);
-  const r = e.size[0] + (e.size[1] - e.size[0]) * Math.pow(p.age, 0.7) * (0.8 + 0.4 * attr(p, 3));
-  const cover = e.density * Math.min(1, p.age / 0.1) * Math.pow(1 - p.age, 0.9);
-  if (cover < 0.04) return false;
+  const sway = e.wobble * Math.sin(attr(p, 2) * TAU + TAU * e.wobbleCycles * p.age);
+  const ax = Math.round(p.ox + e.wind * t * (0.2 + 1.1 * p.age) + sway);
+  const ay = Math.round(p.oy - e.rise * t * (0.85 + 0.3 * attr(p, 1)) * (1 - 0.25 * p.age));
+  const size = e.size[0] + (e.size[1] - e.size[0]) * Math.pow(p.age, 0.6) * (0.8 + 0.4 * attr(p, 3));
+  const n = 3 + Math.floor(attr(p, 4) * 3);
+  const apart = 0.3 + 0.7 * p.age;
+  let rx0 = 0;
+  let rx1 = 0;
+  let ry0 = 0;
+  let ry1 = 0;
+  for (let j = 0; j < n; j++) {
+    const a = attr(p, 10 + j) * TAU;
+    const d = j === 0 ? 0 : size * apart * (0.55 + 0.45 * attr(p, 20 + j));
+    const r = size * (j === 0 ? 0.8 : 0.5 + 0.3 * attr(p, 30 + j));
+    const lx = Math.cos(a) * d * 1.3;
+    const ly = Math.sin(a) * d * 0.7;
+    // Sorted top to bottom: a lower lobe owns the pixels it shares, so its
+    // lit cap sits on the shaded underside of the lobe above.
+    let k = j;
+    for (; k > 0 && lobeY[k - 1] > ly; k--) {
+      lobeX[k] = lobeX[k - 1];
+      lobeY[k] = lobeY[k - 1];
+      lobeR[k] = lobeR[k - 1];
+    }
+    lobeX[k] = lx;
+    lobeY[k] = ly;
+    lobeR[k] = r;
+    rx0 = Math.min(rx0, Math.floor(lx - r - 1));
+    rx1 = Math.max(rx1, Math.ceil(lx + r + 1));
+    ry0 = Math.min(ry0, Math.floor(ly - r - 1));
+    ry1 = Math.max(ry1, Math.ceil(ly + r + 1));
+  }
+  const fade = smoothstep(0.5, 1, p.age);
+  if (fade > 0) fillErosion(p.h, rx0, ry0, rx1, ry1);
   const data = f.target.data;
-  const x0 = Math.max(0, Math.floor(cx - r));
-  const x1 = Math.min(WIDTH - 1, Math.ceil(cx + r));
-  const y0 = Math.max(0, Math.floor(cy - r));
-  const y1 = Math.min(HEIGHT - 1, Math.ceil(cy + r));
-  const r2 = r * r;
-  const light = e.colors[0];
-  const dark = e.colors[1];
+  const lit = e.colors[0];
+  const body = e.colors[1];
+  const under = e.colors[2];
+  const y0 = Math.max(0, ay + ry0);
+  const y1 = Math.min(HEIGHT - 1, ay + ry1);
+  const x0 = Math.max(0, ax + rx0);
+  const x1 = Math.min(WIDTH - 1, ax + rx1);
   let any = false;
   for (let y = y0; y <= y1; y++) {
-    const dy = y + 0.5 - cy;
-    const brow = (y & 3) << 2;
+    const ry = y - ay;
+    const brow = (ry & 3) << 2;
     for (let x = x0; x <= x1; x++) {
-      const dx = x + 0.5 - cx;
-      const d2 = dx * dx + dy * dy;
-      if (d2 > r2) continue;
-      const k = 1 - d2 / r2;
-      const dense = cover * (0.3 + 1.1 * k);
-      const b = BAYER[brow | (x & 3)];
-      if (b < dense) {
-        data[y * WIDTH + x] = b < dense * 0.5 && dy < r * 0.25 ? light : dark;
-        any = true;
+      const rx = x - ax;
+      let deep = -Infinity;
+      let near = 0;
+      let own = -1;
+      for (let j = 0; j < n; j++) {
+        const dx = rx - lobeX[j];
+        const dy = ry - lobeY[j];
+        const s = lobeR[j] - Math.sqrt(dx * dx + dy * dy);
+        if (s > deep) {
+          deep = s;
+          near = j;
+        }
+        if (s > 0) own = j;
       }
+      if (deep <= -1) continue;
+      const b = BAYER[brow | (rx & 3)];
+      if (deep <= 0 && b >= 0.5) continue;
+      if (fade > 0) {
+        const v = erosion(rx, ry) + Math.min(1, deep / size) * 0.6 - fade * 1.6;
+        if (v < 0 || (v < 0.1 && b * 0.1 >= v)) continue;
+      }
+      const l = own >= 0 ? own : near;
+      const shade = (ry - lobeY[l]) / lobeR[l] + (0.35 * (rx - lobeX[l])) / lobeR[l] + (deep <= 0 ? 0.7 : 0) + fade * 0.7;
+      data[y * WIDTH + x] = shade < -0.3 ? lit : shade < 0.45 ? body : under;
+      any = true;
     }
   }
   return any;
@@ -277,13 +353,27 @@ export function particleLayer(): Draw {
   const clocks: Clock[] = EMITTERS.map((e) => clock(e.life));
   const s: Slot = { age: 0, gen: 0 };
   const p: Particle = { age: 0, h: 0, ox: 0, oy: 0, life: 0 };
+  const offset = (e: Emitter, ck: Clock, i: number) => ((i + 0.37 * ((i * 0.618034) % 1)) / e.count) * ck.life;
   return (f: Frame) => {
     for (let ei = 0; ei < EMITTERS.length; ei++) {
       const e = EMITTERS[ei];
       const ck = clocks[ei];
       const draw = DRAW[e.kind];
+      // Offsets rise with i, so ages rise with i from the youngest slot round
+      // to the one before it; walking down from there draws oldest first and
+      // lets younger puffs overlap older ones.
+      let youngest = 0;
+      let minAge = 2;
       for (let i = 0; i < e.count; i++) {
-        slot(f.u, ck, ((i + 0.37 * ((i * 0.618034) % 1)) / e.count) * ck.life, s);
+        slot(f.u, ck, offset(e, ck, i), s);
+        if (s.age < minAge) {
+          minAge = s.age;
+          youngest = i;
+        }
+      }
+      for (let k = 1; k <= e.count; k++) {
+        const i = (youngest - k + e.count) % e.count;
+        slot(f.u, ck, offset(e, ck, i), s);
         const o = e.origins[i % e.origins.length];
         p.age = s.age;
         p.h = hash(e.seed, i, s.gen);
