@@ -2,10 +2,17 @@ import { LOOP_SECONDS } from './contract.ts';
 
 const TAU = Math.PI * 2;
 
-// Canonical position inside the loop. Every animated quantity is computed from
-// this value, so t and t + LOOP_SECONDS land on the same float.
+// Ticks per second for the canonical loop clock: a power-of-two multiple of
+// 60, so every 1/60 frame time is an exact tick.
+const TICKS = 60 * 1024;
+const LOOP_TICKS = LOOP_SECONDS * TICKS;
+
+// Canonical position inside the loop, snapped to the tick grid. t + k * LOOP
+// carries float error that grows with k; snapping absorbs it, so t and
+// t + k * LOOP land on the same bits and no threshold can flip between them.
 export function phase(t: number): number {
-  return ((t % LOOP_SECONDS) + LOOP_SECONDS) % LOOP_SECONDS;
+  const raw = ((t % LOOP_SECONDS) + LOOP_SECONDS) % LOOP_SECONDS;
+  return (Math.round(raw * TICKS) % LOOP_TICKS) / TICKS;
 }
 
 function assertCycles(cycles: number): void {
