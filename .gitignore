@@ -28,3 +28,6 @@ uploads/
 
 # throwaway preview scripts
 .scratch/
+
+# local decision trails
+.audit/
