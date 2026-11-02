@@ -166,16 +166,19 @@ function put(data: Uint8Array, x: number, y: number, c: number): boolean {
 }
 
 function drawSpark(f: Frame, e: Emitter, p: Particle): boolean {
-  const lifeFrac = 0.4 + 0.6 * attr(p, 0);
-  const heat = 1 - p.age / lifeFrac;
-  if (heat <= 0) return false;
+  const span = 0.62 + 0.38 * attr(p, 0);
+  if (p.age >= span) return false;
+  const heat = 1 - p.age / span;
+  // The last fifth blinks. The slice is hashed, so the pattern repeats each loop.
+  if (heat < 0.2 && (hash(p.h, (p.age * 14) | 0) & 7) >= heat * 28) return false;
   const t = p.age * p.life;
   const speed = 0.6 + 0.8 * attr(p, 1);
   const phase = attr(p, 2) * Math.PI * 2;
   const x = p.ox + e.wind * t * t * 0.35 + e.wobble * p.age * Math.sin(phase + Math.PI * 2 * e.wobbleCycles * p.age);
   const y = p.oy - e.rise * speed * t + 3 * t * t * attr(p, 3);
   const ramp = e.colors;
-  const c = ramp[Math.min(ramp.length - 1, Math.floor(heat * heat * (ramp.length - 0.01)))];
+  const bright = heat * (0.45 + 0.55 * attr(p, 4));
+  const c = ramp[Math.min(ramp.length - 1, Math.floor(bright * (ramp.length - 0.01)))];
   return put(f.target.data, x, y, c);
 }
 
